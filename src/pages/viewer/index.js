@@ -27,7 +27,8 @@ import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
 import { StateObject } from 'molstar/lib/mol-state';
 import { Structure } from 'molstar/lib/mol-model/structure';
-import { StructurePreset } from './viewport';
+import { PluginCommands } from 'molstar/lib/mol-plugin/commands';
+import { Color } from 'molstar/lib/mol-util/color';
 
 const CustomFormats = [
   ['g3d', G3dProvider]
@@ -146,6 +147,47 @@ const MergeStructures = PluginStateTransform.BuiltIn({
   }
 });
 
+const Canvas3DPresets = {
+  illustrative: {
+    canvas3d: {
+      postprocessing: {
+        occlusion: { name: 'on', params: { samples: 32, radius: 6, bias: 1.4, blurKernelSize: 15, resolutionScale: 1 } },
+        outline: { name: 'on', params: { scale: 1, threshold: 0.33, color: Color(0x000000) } }
+      },
+      renderer: {
+        ambientIntensity: 1.0,
+        light: []
+      }
+    }
+  },
+  occlusion: {
+    canvas3d: {
+      postprocessing: {
+        occlusion: { name: 'on', params: { samples: 32, radius: 6, bias: 1.4, blurKernelSize: 15, resolutionScale: 1 } },
+        outline: { name: 'off', params: {} }
+      },
+      renderer: {
+        ambientIntensity: 0.4,
+        light: [{ inclination: 180, azimuth: 0, color: Color.fromNormalizedRgb(1.0, 1.0, 1.0),
+          intensity: 0.6 }]
+      }
+    }
+  },
+  standard: {
+    canvas3d: {
+      postprocessing: {
+        occlusion: { name: 'off', params: {} },
+        outline: { name: 'off', params: {} }
+      },
+      renderer: {
+        ambientIntensity: 0.4,
+        light: [{ inclination: 180, azimuth: 0, color: Color.fromNormalizedRgb(1.0, 1.0, 1.0),
+          intensity: 0.6 }]
+      }
+    }
+  }
+};
+
 class Viewer {
 
   constructor(plugin) {
@@ -237,6 +279,7 @@ class Viewer {
   static loadStructuresFromUrlsAndMerge = async (sources, plugin) => {
     // clear state
     // plugin && plugin.clear();
+    await plugin && plugin.clear();
 
     // if (!Array.isArray(sources) || sources.length === 0) return;
     if (!plugin) return;
@@ -250,27 +293,37 @@ class Viewer {
       }
       const data = await plugin.builders.data.download({ url, isBinary: false });
       const trajectory = await plugin.builders.structure.parseTrajectory(data, format);
-
       const model = await plugin.builders.structure.createModel(trajectory);
       const modelProperties = await plugin.builders.structure.insertModelProperties(model);
-      const structure = await plugin.builders.structure.createStructure(modelProperties || model);
-      const structureProperties = await plugin.builders.structure.insertStructureProperties(structure);
-      structures.push({ ref: structureProperties ? structureProperties.ref : structure.ref });
+      
+      const structure = await plugin.builders.structure.createStructure(model || modelProperties, { name: 'model', params: {} });
+      
+      const polymer = await plugin.builders.structure.tryCreateComponentStatic(structure, 'polymer');
+      if (polymer) await plugin.builders.structure.representation.addRepresentation(polymer, { type: 'spacefill', color: 'illustrative' });
+
+      const ligand = await plugin.builders.structure.tryCreateComponentStatic(structure, 'ligand');
+      if (ligand) await plugin.builders.structure.representation.addRepresentation(ligand, { type: 'ball-and-stick', color: 'element-symbol', colorParams: { carbonColor: { name: 'element-symbol', params: {} } } });
     }
 
-    // remove current structures from hierarchy as they will be merged
-    // TODO only works with using loadStructuresFromUrlsAndMerge once
-    //      need some more API metho to work with the hierarchy
-    plugin.managers.structure.hierarchy.updateCurrent(plugin.managers.structure.hierarchy.current.structures, 'remove');
-
-    const dependsOn = structures.map(({ ref }) => ref);
-    const data = plugin.state.data.build().toRoot().apply(MergeStructures, { structures }, { dependsOn });
-    const structure = await data.commit();
-    const structureProperties = await plugin.builders.structure.insertStructureProperties(structure);
-    plugin.behaviors.canvas3d.initialized.subscribe(async v => {
-      await plugin.builders.structure.representation.applyPreset(structureProperties || structure, StructurePreset);
+    const props = Canvas3DPresets['illustrative'];
+    if (props.canvas3d.postprocessing.occlusion && props.canvas3d.postprocessing.occlusion.name === 'on') {
+      props.canvas3d.postprocessing.occlusion.params.radius = 5;
+      props.canvas3d.postprocessing.occlusion.params.bias = 1.1;
+    }
+    PluginCommands.Canvas3D.SetSettings(plugin, {
+      settings: {
+        ...props,
+        renderer: {
+          ...(plugin.canvas3d ? plugin.canvas3d.props.renderer : {}),
+          ...props.canvas3d.renderer
+        },
+        postprocessing: {
+          ...(plugin.canvas3d ? plugin.canvas3d.props.postprocessing : {}),
+          ...props.canvas3d.postprocessing
+        },
+      }
     });
-  };
+  }
 
 }
 
