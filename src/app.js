@@ -13,7 +13,7 @@ class App extends React.Component {
   }
 
   getFiles = () => {
-    return [];
+    return [ { url: '123.cif', }, { url: '456.cif' } ];
   }
 
   render() {
